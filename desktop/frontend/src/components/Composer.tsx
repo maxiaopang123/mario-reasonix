@@ -59,6 +59,7 @@ const IME_CONFIRM_GRACE_MS = 100;
 type PastedBlock = {
   label: string;
   text: string;
+  meta?: string;
 };
 
 type ComposerDraft = {
@@ -917,14 +918,37 @@ export function Composer({
       addWorkspaceReference(ref);
       return;
     }
+    if (insertRequest.fold) {
+      // Insert as a foldable pasted-block card so the composer stays clean;
+      // the raw text is expanded only at submit time.
+      const id = nextPasteId.current++;
+      const label = insertRequest.foldLabel ?? t("composer.pastedLabel", { id, lines: lineCount(insertRequest.text) });
+      const block: PastedBlock = { label, text: insertRequest.text, meta: insertRequest.foldMeta };
+      pastedBlocksRef.current = [...pastedBlocksRef.current, block];
+      setPastedBlocks((prev) => [...prev, block]);
+      // Don't write the label into the textarea — the card above is the sole
+      // visual. Content is appended at submit time.
+      requestAnimationFrame(() => taRef.current?.focus());
+      return;
+    }
     insertTextAtCaret(insertRequest.text);
   }, [insertRequest]);
 
   const expandPastedBlocks = (displayText: string): string => {
     let expanded = displayText;
+    // First, replace any labels that still appear in the textarea (legacy
+    // paste-folded blocks that wrote their label into the text).
     for (const block of pastedBlocksRef.current) {
       if (expanded.includes(block.label)) {
         expanded = expanded.split(block.label).join(renderPastedBlock(block));
+      }
+    }
+    // Then, append any blocks whose labels are NOT in the text (selected-
+    // element cards that were added without touching the textarea).
+    for (const block of pastedBlocksRef.current) {
+      if (!expanded.includes(block.label) && !expanded.includes(block.text)) {
+        const sep = expanded.trim() ? "\n\n" : "";
+        expanded = expanded + sep + renderPastedBlock(block);
       }
     }
     return expanded;
@@ -1088,8 +1112,9 @@ export function Composer({
     if (disabled || submitDisabled || readOnly || submittingRef.current) return;
     const submitDraftKey = activeDraftKeyRef.current;
     const trimmedText = text.trim();
+    const hasPastedBlocks = pastedBlocksRef.current.length > 0;
     if (pendingPaste > 0) return;
-    if (!trimmedText && attachments.length === 0 && workspaceRefs.length === 0) {
+    if (!trimmedText && attachments.length === 0 && workspaceRefs.length === 0 && !hasPastedBlocks) {
       if (goalModeOn && !activeGoal) {
         setComposerPrompt(t("composer.goalInputRequired"));
         requestAnimationFrame(() => taRef.current?.focus());
@@ -1338,7 +1363,18 @@ export function Composer({
 
   const pickCommand = (c: CommandInfo) => setTextCaretEnd("/" + c.name + " ");
 
-  const activePastedBlocks = pastedBlocks.filter((block) => text.includes(block.label));
+  // Show all pasted blocks. Labels that were written into the textarea (paste-
+  // fold) are removed when the user deletes the label text; element-picker
+  // cards were never written to the textarea so they persist until removed
+  // via the card's ✕ button.
+  const activePastedBlocks = pastedBlocks.filter((block) => {
+    // If the label looks like a paste-fold placeholder (contains "Pasted"),
+    // only show it while its label is still in the textarea.
+    if (block.meta === undefined && /Pasted|粘贴/.test(block.label)) {
+      return text.includes(block.label);
+    }
+    return true;
+  });
   const shellModeActive = text.trimStart().startsWith("!");
 
   const removeWorkspaceReference = (target: WorkspaceReference) => {
@@ -2170,11 +2206,21 @@ export function Composer({
         <div className="composer__pasted">
           {activePastedBlocks.map((block) => {
             const open = openPastedLabels.includes(block.label);
+            // If the label follows the "selected element" pattern ⟨tag⟩, show a
+            // colorful HTML-tag badge; otherwise show the label verbatim.
+            const selMatch = block.label.match(/^⟨(\w+)⟩$/);
+            const tooltipLabel = block.meta ?? block.label;
             return (
               <div className="composer__pasted-block" key={block.label}>
                 <div className="composer__pasted-head">
                   <FileText size={15} />
-                  <span className="composer__pasted-label">{block.label}</span>
+                  <Tooltip label={tooltipLabel}>
+                    {selMatch ? (
+                      <code className="composer__pasted-label composer__pasted-label--tag">{"<"}{selMatch[1]}{">"}</code>
+                    ) : (
+                      <span className="composer__pasted-label">{block.label}</span>
+                    )}
+                  </Tooltip>
                   <div className="composer__pasted-actions">
                     <Tooltip label={t(open ? "composer.pastedHidePreview" : "composer.pastedShowPreview")}>
                       <button type="button" onClick={() => togglePastedPreview(block.label)}>
@@ -2264,7 +2310,7 @@ export function Composer({
               <button
                 className="composer__btn composer__btn--send"
                 onClick={submit}
-                disabled={submitting || pendingPaste > 0 || ((!text.trim() && attachments.length === 0 && workspaceRefs.length === 0) && !(goalModeOn && !activeGoal)) || disabled || submitDisabled || readOnly}
+                disabled={submitting || pendingPaste > 0 || ((!text.trim() && attachments.length === 0 && workspaceRefs.length === 0 && pastedBlocks.length === 0) && !(goalModeOn && !activeGoal)) || disabled || submitDisabled || readOnly}
               >
                 <ArrowUp size={16} />
               </button>

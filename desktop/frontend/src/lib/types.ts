@@ -484,7 +484,7 @@ export interface FilePreview {
   size: number;
   truncated: boolean;
   binary: boolean;
-  kind?: "image" | "pdf";
+  kind?: "image" | "pdf" | "html";
   mime?: string;
   url?: string;
   err?: string;
@@ -523,6 +523,12 @@ export interface ComposerInsertRequest {
   id: number;
   text: string;
   mode?: "insert" | "replace";
+  /** When true, insert text as a foldable pasted-block card instead of raw text. */
+  fold?: boolean;
+  /** Label override for the folded card (defaults to an auto-generated one). */
+  foldLabel?: string;
+  /** Optional meta shown as a tooltip on the folded card. */
+  foldMeta?: string;
 }
 
 // MCP & Skills drawer (desktop/app.go Capabilities) — the GUI counterpart to

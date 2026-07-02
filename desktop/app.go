@@ -129,6 +129,7 @@ type App struct {
 	tray                *desktopTray
 
 	mediaTokens *mediaTokenStore
+	dirTokens   *dirTokenStore
 	botInstalls map[string]*botInstallSession
 	botRuntime  *desktopBotRuntime
 
@@ -260,6 +261,88 @@ func (s *mediaTokenStore) get(token string) *mediaTokenEntry {
 	return e
 }
 
+// dirTokenStore manages tokens that map to a workspace DIRECTORY, so HTML
+// previews can load relative resources (./style.css, ./app.js, …) through a
+// bounded static-file endpoint. Same TTL + cap model as mediaTokenStore.
+type dirTokenEntry struct {
+	dirAbs    string
+	createdAt time.Time
+	expiresAt time.Time
+}
+
+type dirTokenStore struct {
+	mu      sync.Mutex
+	byTok   map[string]*dirTokenEntry
+	order   []string
+	ttl     time.Duration
+	maxN    int
+}
+
+func newDirTokenStore() *dirTokenStore {
+	return &dirTokenStore{
+		byTok: map[string]*dirTokenEntry{},
+		ttl:   10 * time.Minute,
+		maxN:  64,
+	}
+}
+
+func (s *dirTokenStore) cleanupLocked() {
+	now := time.Now()
+	for len(s.order) > 0 {
+		tok := s.order[0]
+		e := s.byTok[tok]
+		if e == nil || now.After(e.expiresAt) {
+			delete(s.byTok, tok)
+			s.order = s.order[1:]
+			continue
+		}
+		break
+	}
+	for len(s.order) > s.maxN {
+		oldest := s.order[0]
+		delete(s.byTok, oldest)
+		s.order = s.order[1:]
+	}
+}
+
+func (s *dirTokenStore) create(dirAbs string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupLocked()
+	tok := make([]byte, 16)
+	if _, err := rand.Read(tok); err != nil {
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
+	token := hex.EncodeToString(tok)
+	now := time.Now()
+	s.byTok[token] = &dirTokenEntry{
+		dirAbs:    dirAbs,
+		createdAt: now,
+		expiresAt: now.Add(s.ttl),
+	}
+	s.order = append(s.order, token)
+	for len(s.order) > s.maxN {
+		oldest := s.order[0]
+		delete(s.byTok, oldest)
+		s.order = s.order[1:]
+	}
+	return token
+}
+
+func (s *dirTokenStore) get(token string) *dirTokenEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.byTok[token]
+	if e == nil {
+		return nil
+	}
+	if time.Now().After(e.expiresAt) {
+		delete(s.byTok, token)
+		return nil
+	}
+	return e
+}
+
 func (a *App) ensureMediaTokenStore() *mediaTokenStore {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -269,6 +352,15 @@ func (a *App) ensureMediaTokenStore() *mediaTokenStore {
 	return a.mediaTokens
 }
 
+func (a *App) ensureDirTokenStore() *dirTokenStore {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.dirTokens == nil {
+		a.dirTokens = newDirTokenStore()
+	}
+	return a.dirTokens
+}
+
 // workspaceMediaMiddleware returns an HTTP middleware that intercepts
 // /__reasonix_workspace_media/{token}/{filename} requests and serves the
 // corresponding workspace file. All other paths pass through to the Wails
@@ -276,6 +368,55 @@ func (a *App) ensureMediaTokenStore() *mediaTokenStore {
 func (a *App) workspaceMediaMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Directory-scoped static file server for HTML previews that need
+			// to load relative resources (./style.css, ./app.js, …). A token
+			// binds to a workspace directory; the rest of the path resolves
+			// inside it via http.FileServer. Path escaping is prevented by
+			// enforcing the resolved path stays within dirAbs.
+			dirPrefix := "/__reasonix_workspace_dir/"
+			if strings.HasPrefix(r.URL.Path, dirPrefix) {
+				if r.Method != http.MethodGet && r.Method != http.MethodHead {
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+				rest := strings.TrimPrefix(r.URL.Path, dirPrefix)
+				parts := strings.SplitN(rest, "/", 2)
+				if len(parts) == 0 || parts[0] == "" {
+					http.NotFound(w, r)
+					return
+				}
+				token := parts[0]
+				entry := a.ensureDirTokenStore().get(token)
+				if entry == nil {
+					http.NotFound(w, r)
+					return
+				}
+				rel := "."
+				if len(parts) > 1 && parts[1] != "" {
+					rel = strings.TrimPrefix(parts[1], "/")
+				}
+				// Resolve and guard against traversal outside the workspace dir.
+				abs := filepath.Join(entry.dirAbs, rel)
+				absClean, err := filepath.Abs(filepath.Clean(abs))
+				if err != nil {
+					http.NotFound(w, r)
+					return
+				}
+				dirClean := filepath.Clean(entry.dirAbs)
+				rp, err := filepath.Rel(dirClean, absClean)
+				if err != nil || rp == ".." || strings.HasPrefix(rp, ".."+string(os.PathSeparator)) {
+					http.NotFound(w, r)
+					return
+				}
+				// Rewrite the request URL path to the relative path and serve
+				// via a FileServer rooted at the workspace dir. Using FileServer
+				// gives us correct Content-Type sniffing + conditional requests.
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = "/" + filepath.ToSlash(rel)
+				http.FileServer(http.Dir(dirClean)).ServeHTTP(w, r2)
+				return
+			}
+
 			prefix := "/__reasonix_workspace_media/"
 			if !strings.HasPrefix(r.URL.Path, prefix) {
 				next.ServeHTTP(w, r)
@@ -324,6 +465,7 @@ func NewApp() *App {
 		tabs:             map[string]*WorkspaceTab{},
 		detachedSessions: map[string]*WorkspaceTab{},
 		mediaTokens:      newMediaTokenStore(),
+		dirTokens:        newDirTokenStore(),
 		botInstalls:      map[string]*botInstallSession{},
 		botRuntime:       newDesktopBotRuntime(),
 	}
@@ -542,6 +684,12 @@ func (a *App) createTabEntry(scope, workspaceRoot, topicID string) *WorkspaceTab
 }
 
 func (a *App) createTabEntryWithID(scope, workspaceRoot, topicID, id string) *WorkspaceTab {
+	defaultApprovalMode := control.ToolApprovalAsk
+	if cfg, err := config.Load(); err == nil {
+		if m := normalizeToolApprovalMode(cfg.Agent.ToolApprovalMode); m != "" {
+			defaultApprovalMode = m
+		}
+	}
 	return &WorkspaceTab{
 		ID:               id,
 		Scope:            scope,
@@ -550,7 +698,7 @@ func (a *App) createTabEntryWithID(scope, workspaceRoot, topicID, id string) *Wo
 		TopicTitle:       topicTitleForTab(scope, workspaceRoot, topicID),
 		tokenMode:        boot.TokenModeFull,
 		mode:             "normal",
-		toolApprovalMode: control.ToolApprovalAsk,
+		toolApprovalMode: defaultApprovalMode,
 		disabledMCP:      map[string]ServerView{},
 	}
 }
@@ -3726,7 +3874,7 @@ func (a *App) MetaForTab(tabID string) Meta {
 		WorkspaceRoot:     cwd,
 		WorkspaceName:     tabWorkspaceName(tab, cwd),
 		WorkspacePath:     cwd,
-		GitBranch:         workspaceGitBranch(cwd),
+		GitBranch:         "",
 		AutoApproveTools:  autoApproveTools,
 		Bypass:            autoApproveTools,
 		CollaborationMode: collaborationMode,
@@ -5613,6 +5761,8 @@ const fileRefSearchLimit = 20
 var previewMediaMIMEs = map[string]string{
 	".bmp":  "image/bmp",
 	".gif":  "image/gif",
+	".html": "text/html",
+	".htm":  "text/html",
 	".jpeg": "image/jpeg",
 	".jpg":  "image/jpeg",
 	".pdf":  "application/pdf",
@@ -5647,6 +5797,9 @@ func previewMediaKind(path string) (kind string, mime string) {
 	}
 	if mime == "application/pdf" {
 		return "pdf", mime
+	}
+	if mime == "text/html" {
+		return "html", mime
 	}
 	return "", ""
 }
@@ -5846,6 +5999,55 @@ func (a *App) ReadFile(rel string) FilePreview {
 		return out
 	}
 	out.Body = string(fileenc.Decode(data, enc))
+	return out
+}
+
+// PreviewHtmlFile prepares an HTML file for sandboxed preview with relative
+// resource support. It returns a FilePreview whose URL points at a directory-
+// scoped static endpoint (so ./style.css, ./app.js, etc. resolve correctly),
+// and whose Body contains the raw HTML source for the "source" view.
+func (a *App) PreviewHtmlFile(rel string) FilePreview {
+	out := FilePreview{Path: rel}
+	path, ok, err := a.workspacePath(rel)
+	if err != nil || !ok {
+		out.Err = "invalid path"
+		return out
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		out.Err = err.Error()
+		return out
+	}
+	if info.IsDir() {
+		out.Err = "path is a directory"
+		return out
+	}
+	out.Size = info.Size()
+	out.Kind = "html"
+	out.Mime = "text/html"
+
+	// Read the HTML source (best-effort, bounded by filePreviewLimit).
+	if f, ferr := os.Open(path); ferr == nil {
+		buf := make([]byte, filePreviewLimit+1)
+		if n, _ := f.Read(buf); n > 0 {
+			data := buf[:n]
+			if int64(n) > filePreviewLimit {
+				data = data[:filePreviewLimit]
+				out.Truncated = true
+			}
+			enc, _ := fileenc.Detect(data)
+			if enc != fileenc.LossyUTF8 {
+				out.Body = string(fileenc.Decode(data, enc))
+			}
+		}
+		f.Close()
+	}
+
+	// Issue a directory token rooted at the file's parent dir, and build a URL
+	// that resolves to the HTML file inside that dir.
+	dirAbs := filepath.Dir(path)
+	token := a.ensureDirTokenStore().create(dirAbs)
+	out.URL = "/__reasonix_workspace_dir/" + token + "/" + url.PathEscape(info.Name())
 	return out
 }
 
@@ -6101,6 +6303,37 @@ func safeExportFilename(name string) string {
 		return "reasonix-session.md"
 	}
 	return filepath.Base(name)
+}
+
+// SaveAssetToWorkspace writes a payload (text or base64) to a file inside the
+// active workspace root, with no save dialog. The filename is sanitized to its
+// base so it can't escape the workspace directory. Returns the absolute path
+// written. Used by the mermaid diagram "save SVG" button and similar quick-save
+// flows.
+func (a *App) SaveAssetToWorkspace(filename, payload string, base64Encoded bool) (string, error) {
+	base, err := a.activeWorkspaceBase()
+	if err != nil {
+		return "", err
+	}
+	name := safeExportFilename(filename)
+	if name == "" {
+		return "", os.ErrInvalid
+	}
+	path := filepath.Join(base, name)
+
+	var data []byte
+	if base64Encoded {
+		data, err = base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			return "", fmt.Errorf("decode asset payload: %w", err)
+		}
+	} else {
+		data = []byte(payload)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func exportFileFilters(mimeType, ext string) []runtime.FileFilter {

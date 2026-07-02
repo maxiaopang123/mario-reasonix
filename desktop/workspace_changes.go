@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"reasonix/internal/control"
@@ -228,6 +229,32 @@ func workspaceRelPathFromGitStatus(repoRoot, base, path string) string {
 // workspaceGitBranch returns the current git branch name for the repo rooted
 // at base, or an empty string when base is not inside a git repository or when
 // git is unavailable.
+var (
+	gitBranchCacheMu  sync.Mutex
+	gitBranchCacheMap = map[string]gitBranchEntry{}
+)
+
+type gitBranchEntry struct {
+	branch string
+	at     time.Time
+}
+
+// workspaceGitBranchCached returns the current git branch for base, caching
+// the result for 10 seconds so tab switches don't stall on git I/O.
+func workspaceGitBranchCached(base string) string {
+	gitBranchCacheMu.Lock()
+	e, ok := gitBranchCacheMap[base]
+	gitBranchCacheMu.Unlock()
+	if ok && time.Since(e.at) < 10*time.Second {
+		return e.branch
+	}
+	branch := workspaceGitBranch(base)
+	gitBranchCacheMu.Lock()
+	gitBranchCacheMap[base] = gitBranchEntry{branch: branch, at: time.Now()}
+	gitBranchCacheMu.Unlock()
+	return branch
+}
+
 func workspaceGitBranch(base string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

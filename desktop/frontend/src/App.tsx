@@ -49,6 +49,7 @@ import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { ContextPanel } from "./components/ContextPanel";
 import { WorkspacePanel } from "./components/WorkspacePanel";
+import { FilePreviewPane } from "./components/FilePreviewPane";
 import { Tooltip } from "./components/Tooltip";
 import { StartupSplash } from "./components/StartupSplash";
 import { OnboardingOverlay } from "./components/OnboardingOverlay";
@@ -911,6 +912,11 @@ export default function App() {
   const [projectRevision, setProjectRevision] = useState(0);
   const [activeTopicTurns, setActiveTopicTurns] = useState<number | undefined>(undefined);
   const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null);
+  // ── File preview pane state (independent panel between chat and workspace)
+  const [filePreviewPath, setFilePreviewPath] = useState<string | null>(null);
+  const [filePreviewOpen, setFilePreviewOpen] = useState(false);
+  const [filePreviewWidth, setFilePreviewWidth] = useState(360);
+  const [filePreviewMaximized, setFilePreviewMaximized] = useState(false);
   const transientOverlayDismissSignal = useOverlayStore((s) => s.transientOverlayDismissSignal);
   const setTransientOverlayDismissSignal = useOverlayStore((s) => s.setTransientOverlayDismissSignal);
   const [desktopPlatform, setDesktopPlatform] = useState<DesktopPlatform>(detectBrowserPlatform);
@@ -1989,8 +1995,9 @@ export default function App() {
         "--chat-min-width": `${chatReservedWidth}px`,
         "--workspace-width": `${workspacePanelRenderWidth}px`,
         "--workspace-resizer-width": `${WORKSPACE_RESIZER_WIDTH}px`,
+        "--html-pane-width": `${filePreviewWidth}px`,
       }) as CSSProperties,
-    [chatReservedWidth, sidebarRenderWidth, workspacePanelRenderWidth],
+    [chatReservedWidth, filePreviewWidth, sidebarRenderWidth, workspacePanelRenderWidth],
   );
 
   const setWorkspacePanel = useCallback((open: boolean) => {
@@ -2001,8 +2008,24 @@ export default function App() {
     }
   }, [closeWorkspacePanel, openWorkspacePanel]);
 
-  const addWorkspaceTextToComposer = useCallback((text: string) => {
-    setComposerInsertRequest({ id: Date.now(), text });
+  const addWorkspaceTextToComposer = useCallback((text: string, opts?: { fold?: boolean; foldLabel?: string; foldMeta?: string }) => {
+    setComposerInsertRequest({ id: Date.now(), text, fold: opts?.fold, foldLabel: opts?.foldLabel, foldMeta: opts?.foldMeta });
+  }, []);
+
+  // Open the standalone file preview pane for a given file path.
+  const openFilePreview = useCallback((path: string) => {
+    setFilePreviewPath(path);
+    setFilePreviewOpen(true);
+    // Force workspace to tree mode (not preview/detail) and shrink it.
+    setWorkspacePreviewActive(false);
+    const clamped = clampRightDockTreeWidth(300);
+    setRightDockTreeWidth(clamped);
+    saveRightDockTreeWidth(clamped);
+  }, [setRightDockTreeWidth]);
+
+  const closeFilePreview = useCallback(() => {
+    setFilePreviewOpen(false);
+    setFilePreviewPath(null);
   }, []);
 
   const handleTabChange = useCallback((id: string) => {
@@ -2633,6 +2656,8 @@ export default function App() {
           sidebarCollapsed ? "layout--sidebar-collapsed" : "",
           sidebarResizing ? "layout--resizing layout--sidebar-resizing" : "",
           workspacePanelGridOpen ? "layout--workspace-open" : "",
+          filePreviewOpen ? "layout--file-preview-open" : "",
+          filePreviewOpen && filePreviewMaximized ? "layout--file-preview-maximized" : "",
           workspacePanelOpen && workspacePanelMaximized ? "layout--workspace-maximized" : "",
           workspacePanelResizing ? "layout--resizing layout--workspace-resizing" : "",
         ]
@@ -2676,7 +2701,7 @@ export default function App() {
             <>
               <div className="sidebar__head" aria-hidden={sidebarCollapsed}>
                 <div className="sidebar__brand sidebar__brand--workbench">
-                  <img src={logoWordmark} alt="Reasonix" className="sidebar__brand-logo sidebar__brand-logo--workbench" draggable={false} />
+                  <img src={logoWordmark} alt="Reasonix-Mario" className="sidebar__brand-logo sidebar__brand-logo--workbench" draggable={false} />
                 </div>
               </div>
 
@@ -2696,7 +2721,7 @@ export default function App() {
           ) : (
             <>
               <div className="sidebar__brand" aria-hidden={sidebarCollapsed}>
-                <img src={logoWordmark} alt="Reasonix" className="sidebar__brand-logo" draggable={false} />
+                <img src={logoWordmark} alt="Reasonix-Mario" className="sidebar__brand-logo" draggable={false} />
               </div>
 
               <button
@@ -3290,6 +3315,82 @@ export default function App() {
           </>
         </section>
 
+        {/* File preview pane — independent panel between chat and workspace (absolute positioned) */}
+        {filePreviewOpen && !filePreviewMaximized && (() => {
+          const wsWidth = workspacePanelGridOpen ? workspacePanelRenderWidth : 0;
+          const paneRight = `${wsWidth}px`;
+          const paneLeft = `calc(100% - ${filePreviewWidth + wsWidth}px)`;
+          return (
+            <>
+              <button
+                className="file-preview-pane-resizer"
+                type="button"
+                aria-label="调整预览宽度（双击重置）"
+                style={{ left: paneLeft }}
+                onDoubleClick={() => setFilePreviewWidth(360)}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  const layout = layoutRef.current;
+                  if (!layout) return;
+                  const rect = layout.getBoundingClientRect();
+                  const startX = e.clientX;
+                  const startWidth = filePreviewWidth;
+                  const maxWidth = rect.width - wsWidth - 400; // leave at least 400px for chat
+                  const minWidth = 240;
+                  // Lock cursor + selection during drag for smooth UX
+                  const prevCursor = document.body.style.cursor;
+                  const prevSelect = document.body.style.userSelect;
+                  document.body.style.cursor = "col-resize";
+                  document.body.style.userSelect = "none";
+                  let rafId = 0;
+                  let pendingWidth = startWidth;
+                  const flush = () => {
+                    rafId = 0;
+                    setFilePreviewWidth(pendingWidth);
+                  };
+                  const onMove = (me: PointerEvent) => {
+                    const delta = startX - me.clientX;
+                    pendingWidth = Math.max(minWidth, Math.min(maxWidth, startWidth + delta));
+                    if (!rafId) rafId = requestAnimationFrame(flush);
+                  };
+                  const onUp = () => {
+                    if (rafId) cancelAnimationFrame(rafId);
+                    setFilePreviewWidth(pendingWidth);
+                    document.body.style.cursor = prevCursor;
+                    document.body.style.userSelect = prevSelect;
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                    window.removeEventListener("pointercancel", onUp);
+                  };
+                  window.addEventListener("pointermove", onMove);
+                  window.addEventListener("pointerup", onUp);
+                  window.addEventListener("pointercancel", onUp);
+                }}
+              />
+              <div style={{ position: "fixed", top: "var(--app-chrome-height, 38px)", bottom: 0, left: paneLeft, right: paneRight, zIndex: 100 }}>
+                <FilePreviewPane
+                  filePath={filePreviewPath}
+                  onAddToChat={addWorkspaceTextToComposer}
+                  onClose={closeFilePreview}
+                  onToggleMaximize={() => setFilePreviewMaximized((v) => !v)}
+                  maximized={filePreviewMaximized}
+                />
+              </div>
+            </>
+          );
+        })()}
+        {filePreviewOpen && filePreviewMaximized && (
+          <div style={{ position: "fixed", top: "var(--app-chrome-height, 38px)", bottom: 0, left: "var(--sidebar-width, 0px)", right: 0, zIndex: 100 }}>
+            <FilePreviewPane
+              filePath={filePreviewPath}
+              onAddToChat={addWorkspaceTextToComposer}
+              onClose={closeFilePreview}
+              onToggleMaximize={() => setFilePreviewMaximized((v) => !v)}
+              maximized={filePreviewMaximized}
+            />
+          </div>
+        )}
+
         {workspacePanelGridOpen && (
           <button
             className="workspace-panel-resizer"
@@ -3380,6 +3481,9 @@ export default function App() {
                   }}
                   onPreviewModeChange={handleWorkspacePreviewModeChange}
                   onAddToChat={addWorkspaceTextToComposer}
+                  onOpenHtmlPreview={openFilePreview}
+                  onFileOpened={openFilePreview}
+                  hidePreview={true}
                   onRequestPanelWidth={ensureWorkspacePanelWidth}
                   refreshKey={dockRefreshKey}
                   initialViewMode={rightDockMode === "changed" ? "changed" : "files"}

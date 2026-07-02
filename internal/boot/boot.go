@@ -1003,6 +1003,14 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 	}
 
+	// ── User persona injection (from REASONIX.md global rules) ───────────
+	// Appended as the LAST thing before the system prompt is sealed. Recency
+	// bias gives these user-written rules maximum priority. The memory SET
+	// already contains all loaded docs (user/project/local); we only surface
+	// the user-scoped one(s) here — they're the user's personal rules.
+	sysPrompt += "\n\n" + userPersona(mem)
+	// ── End persona injection ─────────────────────────────────────────────
+
 	ctrlOpts := control.Options{
 		Runner:                 runner,
 		Executor:               executor,
@@ -1034,6 +1042,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		Shell:                  shell,
 		PlanModeAllowedTools:   cfg.Agent.PlanModeAllowedTools,
 		ApprovalTimeout:        opts.ApprovalTimeout,
+		ToolApprovalMode:       cfg.Agent.ToolApprovalMode,
 		OnRemember: func(rule string) control.RememberResult {
 			return rememberPermissionRule(root, rule)
 		},
@@ -1167,6 +1176,27 @@ func subagentModelKeys(name string) []string {
 		}
 	}
 	return keys
+}
+
+// userPersona extracts user-scoped memory docs (REASONIX.md / AGENTS.md from
+// the global config dir) and returns them as a high-priority persona block
+// injected at the end of the system prompt. Recency bias ensures these user
+// rules take precedence over built-in instructions. Edit the file directly
+// (e.g. ~\.reasonix\REASONIX.md) to update rules without recompiling.
+func userPersona(mem *memory.Set) string {
+	if mem == nil || len(mem.Docs) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, d := range mem.Docs {
+		if d.Scope == memory.ScopeUser && strings.TrimSpace(d.Body) != "" {
+			parts = append(parts, d.Body)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "## 👤 用户全局规则\n\n" + strings.Join(parts, "\n\n---\n\n")
 }
 
 func resolveWorkspaceRoot(explicit string) string {

@@ -336,6 +336,16 @@ func (r *mdRenderer) appendInline(b *strings.Builder, n ast.Node, src []byte) {
 			var inner strings.Builder
 			r.appendInline(&inner, v, src)
 			b.WriteString(accent(inner.String()))
+		case *ast.Image:
+			alt := r.collectInline(v, src)
+			dest := string(v.Destination)
+			if alt != "" && dest != "" {
+				b.WriteString("🖼 " + alt + dim(" ("+dest+")"))
+			} else if dest != "" {
+				b.WriteString("🖼 " + dim(dest))
+			} else if alt != "" {
+				b.WriteString("🖼 " + alt)
+			}
 		case *ast.Link:
 			var inner strings.Builder
 			r.appendInline(&inner, v, src)

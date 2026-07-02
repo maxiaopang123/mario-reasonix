@@ -5,6 +5,8 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import MermaidDiagram from "./MermaidDiagram";
+import HtmlBlock from "./HtmlBlock";
 import { CodeViewer } from "./CodeViewer";
 import { normalizeMath } from "./mathNormalize";
 import { openExternal } from "../lib/bridge";
@@ -93,11 +95,32 @@ function createComponents(plainStatusBlocks: boolean): Components {
       const match = /language-([\w-]+)/.exec(className ?? "");
       const isBlock = match !== null || text.includes("\n");
       if (isBlock) {
+        if (match?.[1] === "mermaid") {
+          return <MermaidDiagram chart={text.replace(/\n$/, "")} />;
+        }
+        if (match?.[1] === "html") {
+          return <HtmlBlock source={text.replace(/\n$/, "")} />;
+        }
         if (!match && plainStatusBlocks) return <PlainMarkdownBlock text={text.replace(/\n$/, "")} />;
         return <CodeViewer value={text.replace(/\n$/, "")} language={match?.[1]} maxHeight={360} />;
       }
       return <code className="md-code">{children}</code>;
     },
+    img: ({ src, alt }) => (
+      <img
+        src={src}
+        alt={alt ?? ""}
+        style={{ maxWidth: "100%", borderRadius: 4, display: "block", margin: "4px 0" }}
+        onError={(e) => {
+          const el = e.currentTarget;
+          el.style.display = "none";
+          const fallback = document.createElement("span");
+          fallback.textContent = `🖼 ${alt ?? src ?? "image"}`;
+          fallback.className = "md-img-fallback";
+          el.parentNode?.insertBefore(fallback, el.nextSibling);
+        }}
+      />
+    ),
     a: ({ href, children }) => (
       <a
         href={href}

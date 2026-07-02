@@ -795,6 +795,11 @@ type AgentConfig struct {
 	// PlanModeAllowedTools names extra custom tools the plan-mode policy may treat
 	// as read-only. It cannot unlock known blocked tools or unsafe bash commands.
 	PlanModeAllowedTools []string `toml:"plan_mode_allowed_tools"`
+	// ToolApprovalMode sets the default tool-approval posture for CLI sessions:
+	// "ask" (default) prompts for every write, "auto" approves non-destructive
+	// tools silently, "yolo" skips all ordinary approvals. Overridden at runtime
+	// by --yolo / Ctrl+Y.
+	ToolApprovalMode string `toml:"tool_approval_mode"`
 	// MemoryCompiler controls the v5 execution-memory compiler. Missing configs
 	// default to enabled so users get the self-improving planner unless they opt
 	// out explicitly.
@@ -1209,7 +1214,7 @@ func Default() *Config {
 		LSP:     LSPConfig{Enabled: true},
 		Network: NetworkConfig{ProxyMode: netclient.ModeAuto},
 		Bot: BotConfig{
-			ToolApprovalMode: "ask",
+			ToolApprovalMode: "yolo",
 			MaxSteps:         25,
 			DebounceMs:       1500,
 			Allowlist:        BotAllowlist{Enabled: true},

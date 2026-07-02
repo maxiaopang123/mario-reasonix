@@ -199,6 +199,7 @@ export interface AppBindings {
   ListDir(rel: string): Promise<DirEntry[]>;
   SearchFileRefs(query: string): Promise<DirEntry[]>;
   ReadFile(rel: string): Promise<FilePreview>;
+  PreviewHtmlFile(rel: string): Promise<FilePreview>;
   WorkspaceChanges(tabID: string): Promise<WorkspaceChangesView>;
   GitBranches(): Promise<string[]>;
   GitCheckout(branch: string): Promise<void>;
@@ -212,6 +213,7 @@ export interface AppBindings {
   SavePastedFile(name: string, dataUrl: string): Promise<string>;
   PickExportFile(defaultFilename: string, mimeType: string): Promise<string>;
   SaveExportFile(path: string, payload: string, base64Encoded: boolean): Promise<void>;
+  SaveAssetToWorkspace(filename: string, payload: string, base64Encoded: boolean): Promise<string>;
   AttachDropped(path: string): Promise<DroppedItem>;
   AttachmentDataURL(path: string): Promise<string>;
   Models(): Promise<ModelInfo[]>;
@@ -2177,6 +2179,19 @@ function makeMockApp(): AppBindings {
         binary: false,
       };
     },
+    async PreviewHtmlFile(rel: string) {
+      const body = `<!doctype html><html><body><h1>Mock HTML preview</h1><p>${rel}</p></body></html>`;
+      return {
+        path: rel,
+        body,
+        size: body.length,
+        truncated: false,
+        binary: false,
+        kind: "html" as const,
+        mime: "text/html",
+        url: `data:text/html;charset=utf-8,${encodeURIComponent(body)}`,
+      };
+    },
     async WorkspaceChanges(_tabID: string) {
       return {
         gitAvailable: true,
@@ -2247,6 +2262,23 @@ function makeMockApp(): AppBindings {
       a.click();
       a.remove();
       if (!base64Encoded) URL.revokeObjectURL(url);
+    },
+    async SaveAssetToWorkspace(filename: string, payload: string, base64Encoded: boolean) {
+      // Browser-dev fallback: trigger a normal download.
+      const a = document.createElement("a");
+      let url = "";
+      if (base64Encoded) {
+        url = `data:application/octet-stream;base64,${payload}`;
+      } else {
+        url = URL.createObjectURL(new Blob([payload], { type: "text/plain;charset=utf-8" }));
+      }
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      if (!base64Encoded) URL.revokeObjectURL(url);
+      return filename;
     },
     async AttachDropped(path: string) {
       const name = path.split(/[/\\]/).filter(Boolean).pop() ?? path;

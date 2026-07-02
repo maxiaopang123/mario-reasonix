@@ -11,6 +11,8 @@ import type {
 import {
   ChevronDown,
   ChevronRight,
+  Code2,
+  Eye,
   FileText,
   Folder,
   FolderOpen,
@@ -20,6 +22,7 @@ import {
   Maximize2,
   MessageSquarePlus,
   Minimize2,
+  MousePointerClick,
   RefreshCw,
   Search,
   X,
@@ -143,6 +146,19 @@ function renderMediaPreview(preview: FilePreview): ReactElement | null {
       />
     );
   }
+  if (preview.kind === "html") {
+    // Load the HTML file via the workspace media middleware URL (same path
+    // used for images/PDFs). Sandbox without allow-same-origin so the previewed
+    // page can't touch the parent app's DOM/storage.
+    return (
+      <iframe
+        className="workspace-media workspace-media--html"
+        src={preview.url}
+        sandbox="allow-scripts allow-popups"
+        title={basename(preview.path)}
+      />
+    );
+  }
   return null;
 }
 
@@ -205,6 +221,9 @@ export function WorkspacePanel({
   onToggleMaximized,
   onPreviewModeChange,
   onAddToChat,
+  onOpenHtmlPreview,
+  onFileOpened,
+  hidePreview,
   onRequestPanelWidth,
   refreshKey,
   initialViewMode = "files",
@@ -222,7 +241,13 @@ export function WorkspacePanel({
   onClose: () => void;
   onToggleMaximized: () => void;
   onPreviewModeChange?: (active: boolean) => void;
-  onAddToChat?: (text: string) => void;
+  onAddToChat?: (text: string, opts?: { fold?: boolean; foldLabel?: string; foldMeta?: string }) => void;
+  /** When provided, clicking an HTML file opens a standalone preview pane instead of in-panel. */
+  onOpenHtmlPreview?: (path: string) => void;
+  /** Called whenever a file is selected in the tree (for external preview). */
+  onFileOpened?: (path: string) => void;
+  /** When true, the in-panel preview area is hidden (external preview pane handles it). */
+  hidePreview?: boolean;
   onRequestPanelWidth?: (width: number) => void;
   refreshKey?: number;
   initialViewMode?: "files" | "changed";
@@ -397,8 +422,9 @@ export function WorkspacePanel({
       dirs.forEach((dir) => {
         if (!entriesByDir[dir]) void loadDir(dir);
       });
+      onFileOpened?.(path);
     },
-    [entriesByDir, loadDir, openTabs.length, panelWidth, selectedPath, treeVisible],
+    [entriesByDir, loadDir, onFileOpened, onOpenHtmlPreview, openTabs.length, panelWidth, selectedPath, treeVisible],
   );
 
   useEffect(() => {
@@ -652,8 +678,9 @@ export function WorkspacePanel({
     if (!selectedPath) return;
     let live = true;
     setLoadingPreview(true);
-    app
-      .ReadFile(selectedPath)
+    const isHtml = /\.(html?|htm)$/i.test(selectedPath);
+    const fetcher = isHtml ? app.PreviewHtmlFile(selectedPath) : app.ReadFile(selectedPath);
+    fetcher
       .then((next) => {
         if (live) setPreview(next);
       })
@@ -799,7 +826,7 @@ export function WorkspacePanel({
 
   const filePreviewActive = openTabs.length > 0 || selectedPath !== null;
   const changeDetailActive = changedMode && expandedCommit !== null;
-  const previewVisible = changedMode || filePreviewActive;
+  const previewVisible = hidePreview ? false : (changedMode || filePreviewActive);
   const showTreeRail = previewVisible && !changedMode;
   const splitPanesFit = useMemo(
     () =>
@@ -812,7 +839,7 @@ export function WorkspacePanel({
     [panelWidth],
   );
   const actualTreeVisible = changedMode ? false : treeVisible && (!previewVisible || splitPanesFit);
-  const previewModeActive = open && (filePreviewActive || changeDetailActive);
+  const previewModeActive = open && !hidePreview && (filePreviewActive || changeDetailActive);
   const embeddedDockMode = !showViewTabs;
   const showFileTools = showViewTabs || filePreviewActive;
   const effectiveTreeWidth = useMemo(
@@ -1471,6 +1498,8 @@ export function WorkspacePanel({
             <div className="workspace-empty">{t("workspace.loading")}</div>
           ) : preview?.err ? (
             <div className="workspace-empty workspace-empty--error">{preview.err}</div>
+          ) : preview?.kind === "html" ? (
+            <HtmlPreviewBlock preview={preview} onAddToChat={onAddToChat} />
           ) : preview?.kind ? (
             renderMediaPreview(preview)
           ) : preview?.binary ? (
@@ -1685,5 +1714,163 @@ export function WorkspacePanel({
         onClose={() => setTreeBlankMenuPoint(null)}
       />
     </aside>
+  );
+}
+
+// ── HTML preview with toolbar (preview/source toggle + pick-element) ──────────
+// The iframe loads the HTML via a directory-scoped URL so relative resources
+// (./style.css, ./app.js) resolve. sandbox="allow-scripts allow-popups" lets
+// the page run JS without touching the parent app (no allow-same-origin).
+// Element picking injects a script via postMessage that turns on hover-highlight;
+// the iframe reports back the chosen element's outerHTML, which we forward to
+// the chat composer via onAddToChat.
+
+const PICKER_SCRIPT = `
+(function(){
+  if (window.__reasonixPickerActive) { window.__reasonixPickerActive = !window.__reasonixPickerActive; return; }
+  window.__reasonixPickerActive = true;
+  var overlay = document.createElement('div');
+  overlay.id = '__reasonix_picker_highlight';
+  overlay.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #4f9cff;background:rgba(79,156,255,0.12);transition:all 60ms ease;display:none;';
+  document.body.appendChild(overlay);
+  function position(el){
+    var r = el.getBoundingClientRect();
+    overlay.style.display = 'block';
+    overlay.style.left = r.left + 'px';
+    overlay.style.top = r.top + 'px';
+    overlay.style.width = r.width + 'px';
+    overlay.style.height = r.height + 'px';
+  }
+  function onMove(e){
+    if (!window.__reasonixPickerActive) return;
+    var el = document.elementFromPoint(e.clientX, e.clientY);
+    if (!el || el === overlay || el.id === '__reasonix_picker_highlight') return;
+    position(el);
+  }
+  function onKey(e){
+    if (e.key === 'Escape') cleanup();
+  }
+  function onClick(e){
+    if (!window.__reasonixPickerActive) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    var el = document.elementFromPoint(e.clientX, e.clientY);
+    if (!el || el.id === '__reasonix_picker_highlight') return;
+    parent.postMessage({ __reasonixPicker: true, html: el.outerHTML, tag: el.tagName.toLowerCase() }, '*');
+    // Stay in picking mode so the user can select multiple elements.
+    // ESC or clicking the toolbar button again ends the session.
+  }
+  function cleanup(){
+    window.__reasonixPickerActive = false;
+    document.removeEventListener('mousemove', onMove, true);
+    document.removeEventListener('click', onClick, true);
+    document.removeEventListener('keydown', onKey, true);
+    var o = document.getElementById('__reasonix_picker_highlight');
+    if (o) o.remove();
+  }
+  document.addEventListener('mousemove', onMove, true);
+  document.addEventListener('click', onClick, true);
+  document.addEventListener('keydown', onKey, true);
+})();
+`;
+
+function HtmlPreviewBlock({
+  preview,
+  onAddToChat,
+}: {
+  preview: FilePreview;
+  onAddToChat?: (text: string, opts?: { fold?: boolean; foldLabel?: string; foldMeta?: string }) => void;
+}) {
+  const [mode, setMode] = useState<"preview" | "source">("preview");
+  const [picking, setPicking] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Forward picker results from the iframe to the chat composer.
+  useEffect(() => {
+    function onMsg(e: MessageEvent) {
+      const data = e.data as { __reasonixPicker?: boolean; html?: string; tag?: string } | null;
+      if (!data || !data.__reasonixPicker) return;
+      setPicking(false);
+      if (!data.html) return;
+      const fence = "```";
+      const safeFence = data.html.includes(fence) ? "````" : fence;
+      const ref = `From \`${preview.path}\` (selected <${data.tag ?? "element"}>):\n\n${safeFence}html\n${data.html}\n${safeFence}`;
+      const label = `⟨${data.tag ?? "element"}⟩`;
+      onAddToChat?.(ref, { fold: true, foldLabel: label, foldMeta: `from ${basename(preview.path)}` });
+    }
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [preview.path, onAddToChat]);
+
+  const togglePicker = () => {
+    const next = !picking;
+    setPicking(next);
+    const iframe = iframeRef.current;
+    if (!iframe || !iframe.contentWindow) return;
+    // With allow-same-origin we can evaluate the picker script in the iframe.
+    try {
+      // The script toggles via a guard flag (window.__reasonixPickerActive),
+      // so calling it again turns picking off.
+      (iframe.contentWindow as unknown as { eval?: (s: string) => void }).eval?.(PICKER_SCRIPT);
+    } catch {
+      // Cross-origin / not ready yet — ignore; user can retry.
+    }
+  };
+
+  return (
+    <div className="html-preview">
+      <div className="html-preview__toolbar">
+        <div className="html-preview__toggle" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "preview"}
+            className={"html-preview__tab" + (mode === "preview" ? " is-active" : "")}
+            onClick={() => setMode("preview")}
+            title="渲染预览"
+          >
+            <Eye size={13} />
+            <span>预览</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "source"}
+            className={"html-preview__tab" + (mode === "source" ? " is-active" : "")}
+            onClick={() => setMode("source")}
+            title="查看源代码"
+          >
+            <Code2 size={13} />
+            <span>源码</span>
+          </button>
+        </div>
+        {mode === "preview" && preview.url && (
+          <button
+            type="button"
+            className={"html-preview__pick" + (picking ? " is-active" : "")}
+            onClick={togglePicker}
+            title={picking ? "点击页面中的元素以选中（ESC 取消）" : "选中页面元素并填入聊天"}
+          >
+            <MousePointerClick size={13} />
+            <span>{picking ? "选择中…" : "选中元素"}</span>
+          </button>
+        )}
+      </div>
+      <div className="html-preview__body">
+        {mode === "preview" && preview.url ? (
+          <iframe
+            ref={iframeRef}
+            className="workspace-media workspace-media--html"
+            src={preview.url}
+            sandbox="allow-scripts allow-popups allow-forms allow-same-origin"
+            title={basename(preview.path)}
+          />
+        ) : (
+          <>
+            {preview.truncated && <div className="workspace-note">已截断</div>}
+            <CodeViewer value={preview.body || " "} language="html" maxHeight={0} />
+          </>
+        )}
+      </div>
+    </div>
   );
 }

@@ -272,6 +272,10 @@ type Options struct {
 	// terminal. Bot/headless frontends set a positive value so an unanswered
 	// prompt can't wedge the session indefinitely (#4626, #4402).
 	ApprovalTimeout time.Duration
+	// ToolApprovalMode sets the initial approval posture: "ask", "auto", or
+	// "yolo". Empty defaults to "ask". Loaded from [agent] tool_approval_mode
+	// in reasonix.toml so the setting persists across sessions.
+	ToolApprovalMode string
 }
 
 // New builds a Controller. A nil Sink is replaced with event.Discard.
@@ -315,7 +319,7 @@ func New(opts Options) *Controller {
 		jobs:                   opts.Jobs,
 		mcp:                    newMcpManager(opts.Host, opts.Registry, pluginCtx),
 		workspaceRoot:          opts.WorkspaceRoot,
-		approval:               newApprovalManager(opts.Policy, ToolApprovalAsk, opts.ApprovalTimeout),
+		approval:               newApprovalManager(opts.Policy, normalizeToolApprovalMode(opts.ToolApprovalMode), opts.ApprovalTimeout),
 	}
 	// Checkpoints: bind a store to the session and route writer pre-edits into it.
 	c.rebindCheckpoints(opts.SessionPath)

@@ -933,12 +933,15 @@ export function useController() {
     tabId: string,
     reset = false,
     reason: HydrateReason = "startup",
-    options: { skipHistory?: boolean; placeholderItems?: Item[] } = {},
+    options: { skipHistory?: boolean; placeholderItems?: Item[]; silent?: boolean } = {},
   ) => {
     const seq = bumpSessionLoadSeq(tabId);
     const hydrateStartedAt = Date.now();
     addBreadcrumb("tab.hydrate", `start ${reason} ${tabId}`);
-    dispatchTo(tabId, { type: "hydrate_start", reason, placeholderItems: options.placeholderItems });
+    // silent mode: skip hydrate_start so the UI doesn't flash "syncing"
+    if (!options.silent) {
+      dispatchTo(tabId, { type: "hydrate_start", reason, placeholderItems: options.placeholderItems });
+    }
     if (reset && sessionLoadCurrent(tabId, seq)) dispatchTo(tabId, { type: "reset" });
 
     const stillCurrent = () => sessionLoadCurrent(tabId, seq);
@@ -1509,7 +1512,12 @@ export function useController() {
     if (optimisticTab) {
       dispatchTo(tabId, { type: "optimistic_meta", meta: metaFromTab(optimisticTab, statesRef.current.get(tabId)?.meta) });
     }
-    dispatchTo(tabId, { type: "hydrate_start", reason: "switch-tab" });
+    // Only show "syncing" if we have no local data yet; tabs that have been
+    // visited before will render from cache instantly.
+    const localItems = statesRef.current.get(tabId)?.items;
+    if (!localItems || localItems.length === 0) {
+      dispatchTo(tabId, { type: "hydrate_start", reason: "switch-tab" });
+    }
     addBreadcrumb("tab.switch", `active-rendered ${tabId} ms=${Date.now() - startedAt}`);
     const backendActivation = app.SetActiveTab(tabId)
       .then(() => {
@@ -1527,9 +1535,26 @@ export function useController() {
       .then(async (activated) => {
         if (!activated) return undefined;
         const tabs = await reconcileTabRuntime(tabId, { hydrateSessionData: false });
-        void loadSessionDataForTab(tabId, false, "switch-tab", {
-          skipHistory: hasCachedLiveTurn(statesRef.current.get(tabId)),
-        });
+        const localState = statesRef.current.get(tabId);
+        const hasLocalItems = (localState?.items?.length ?? 0) > 0;
+        const isLive = hasCachedLiveTurn(localState);
+        if (!hasLocalItems) {
+          // First visit: full hydrate (will show "syncing").
+          void loadSessionDataForTab(tabId, false, "switch-tab", {});
+        } else if (isLive) {
+          // Active streaming tab: skip history but still sync meta/jobs.
+          void loadSessionDataForTab(tabId, false, "switch-tab", { skipHistory: true });
+        } else {
+          // Cached tab: silent background refresh — no "syncing" flash.
+          setTimeout(() => {
+            if (activeTabIdRef.current === tabId) {
+              void loadSessionDataForTab(tabId, false, "switch-tab", {
+                skipHistory: true,
+                silent: true,
+              });
+            }
+          }, 3000);
+        }
         return tabs;
       })
       .catch((err) => {

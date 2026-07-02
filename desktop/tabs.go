@@ -1517,9 +1517,10 @@ func (a *App) SetActiveTab(tabID string) error {
 	dir, entries, activeID, version := a.saveTabsCollectLocked()
 	a.mu.Unlock()
 
-	// I/O outside the lock — disk writes can block for hundreds of ms on
-	// Windows when antivirus or the search indexer briefly locks the file.
-	a.saveTabsWrite(dir, entries, activeID, version)
+	// Persist asynchronously so the tab switch is not blocked by disk I/O.
+	// Windows antivirus / search indexer can delay file writes by hundreds
+	// of ms, making every tab switch feel sluggish otherwise.
+	go a.saveTabsWrite(dir, entries, activeID, version)
 	return nil
 }
 

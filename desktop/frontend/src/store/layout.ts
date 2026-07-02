@@ -19,8 +19,8 @@ import { loadLayoutSize, saveLayoutSize } from "../lib/layoutPreferences";
 import { applySetState } from "./setState";
 
 const SIDEBAR_COLLAPSED_KEY = "reasonix.sidebar.collapsed";
-const SIDEBAR_DEFAULT_WIDTH = 264;
-export const SIDEBAR_MIN_WIDTH = 264;
+const SIDEBAR_DEFAULT_WIDTH = 150;
+export const SIDEBAR_MIN_WIDTH = 150;
 export const CREATION_SIDEBAR_MIN_WIDTH = 236;
 export const SIDEBAR_MAX_WIDTH = 300;
 const SIDEBAR_VIEWPORT_RATIO = 0.18;
@@ -30,7 +30,7 @@ export const RIGHT_DOCK_TREE_MIN_WIDTH = 300;
 export const RIGHT_DOCK_TREE_MAX_WIDTH = 560;
 export const RIGHT_DOCK_PREVIEW_DEFAULT_WIDTH = 660;
 export const RIGHT_DOCK_PREVIEW_MIN_WIDTH = 420;
-export const RIGHT_DOCK_MIN_RENDER_WIDTH = 280;
+export const RIGHT_DOCK_MIN_RENDER_WIDTH = 100;
 export const RIGHT_DOCK_MAX_WIDTH = 860;
 const WORKSPACE_PANEL_DEFAULT_OPEN = false;
 
