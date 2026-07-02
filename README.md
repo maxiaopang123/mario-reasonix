@@ -48,11 +48,10 @@
 
 预编译的安装包可在 Releases 页面下载：
 
-| 文件 | 说明 | 适用平台 |
-|------|------|---------|
-| `reasonix-mario-v1.0.0-amd64-installer.exe` | NSIS 安装包（含 WebView2 运行时） | Windows x64 |
-| `Reasonix-Mario.app` | 桌面 GUI 应用 | macOS (Apple Silicon) |
-| `reasonix-mario` CLI | 终端命令行工具 | macOS / Linux |
+| 文件 | 平台 | 说明 |
+|------|------|------|
+| `Reasonix-Mario-1.0.0-arm64.dmg` | macOS (Apple Silicon) | DMG 安装映像 — 双击安装 |
+| `reasonix-mario-v1.0.0-amd64-installer.exe` | Windows x64 | NSIS 安装包（含 WebView2 运行时） |
 
 > 🔗 前往 **[Releases →](https://github.com/maxiaopang123/mario-reasonix/releases)** 下载最新版本
 
