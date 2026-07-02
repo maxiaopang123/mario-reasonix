@@ -11,6 +11,8 @@
   &nbsp;·&nbsp;
   <a href="#-mac-构建">Mac 构建</a>
   &nbsp;·&nbsp;
+  <a href="#-downloads">Downloads</a>
+  &nbsp;·&nbsp;
   <a href="#-quick-start">Quick Start</a>
   &nbsp;·&nbsp;
   <a href="#%EF%B8%8F-configuration">Configuration</a>
@@ -20,8 +22,15 @@
 
 <br/>
 
-> **🍴 个人 Fork** — 基于 [esengine/DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix) `main-v2` 分支，
-> 专注于 **Mac 桌面版** 的构建与日常使用。CLI + Wails 桌面双模式。
+> [!IMPORTANT]
+> **🙏 本仓库是 [esengine/DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix) 的个人 Fork**
+>
+> 本项目在 **Reasonix 原版** 基础上修改而来，仅做**个人学习和使用**用途。
+> 所有核心代码、架构设计、功能逻辑均归属于 **Reasonix 原项目团队**。
+>
+> 原版项目：**[esengine/DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix)**
+>
+> 如果你喜欢这个项目，请给原仓库 ⭐ Star → 他们值得！
 
 <br/>
 
@@ -32,6 +41,20 @@
 - **Plugin-driven.** 通过 stdio JSON-RPC 支持 MCP 插件扩展
 - **Desktop + CLI 双模式.** 同一套 Go 内核，终端和桌面 GUI 两不误
 - **Zero-friction 单二进制.** `CGO_ENABLED=0` 编译，无外部依赖
+
+<br/>
+
+## 📥 Downloads
+
+预编译的安装包可在 Releases 页面下载：
+
+| 文件 | 说明 | 适用平台 |
+|------|------|---------|
+| `reasonix-mario-v1.0.0-amd64-installer.exe` | NSIS 安装包（含 WebView2 运行时） | Windows x64 |
+| `Reasonix-Mario.app` | 桌面 GUI 应用 | macOS (Apple Silicon) |
+| `reasonix-mario` CLI | 终端命令行工具 | macOS / Linux |
+
+> 🔗 前往 **[Releases →](https://github.com/maxiaopang123/mario-reasonix/releases)** 下载最新版本
 
 <br/>
 
@@ -136,8 +159,12 @@ api_key_env = "DEEPSEEK_API_KEY"
 
 ## 🔗 相关仓库
 
-- ⬆ **上游：** [`esengine/DeepSeek-Reasonix`](https://github.com/esengine/DeepSeek-Reasonix) — 原项目主仓库，所有核心开发在此进行
-- 📦 **本仓库：** [`maxiaopang123/mario-reasonix`](https://github.com/maxiaopang123/mario-reasonix) — 个人 fork，桌面构建优化
+| 仓库 | 说明 |
+|------|------|
+| ⬆️ **上游原版** [`esengine/DeepSeek-Reasonix`](https://github.com/esengine/DeepSeek-Reasonix) | 🏆 Reasonix 核心项目 — 所有 AI 引擎、插件系统、架构设计均源于此 |
+| 📦 **本 Fork** [`maxiaopang123/mario-reasonix`](https://github.com/maxiaopang123/mario-reasonix) | 个人桌面构建优化版，仅做配置与打包调整 |
+
+> 💡 **本仓库不包含任何原创 AI 功能**，所有智能体逻辑、Token 优化、MCP 插件系统均为原版 Reasonix 团队的成果。
 
 <br/>
 
@@ -146,5 +173,7 @@ api_key_env = "DEEPSEEK_API_KEY"
 <p align="center">
   <sub>MIT License — see <a href="./LICENSE">LICENSE</a></sub>
   <br/>
-  <sub>Forked from <a href="https://github.com/esengine/DeepSeek-Reasonix">esengine/DeepSeek-Reasonix</a></sub>
+  <sub><strong>Forked from</strong> <a href="https://github.com/esengine/DeepSeek-Reasonix">esengine/DeepSeek-Reasonix</a></sub>
+  <br/>
+  <sub>🏅 原创项目 · 值得 Star → <a href="https://github.com/esengine/DeepSeek-Reasonix">github.com/esengine/DeepSeek-Reasonix</a></sub>
 </p>
